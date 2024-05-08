@@ -11,7 +11,7 @@ A continuación se listan los requerimientos para realizar el entrenamiento de m
     >pip install keras
 
 ## Entrenando el Primer Modelo
-El código que se discute en toda esta sección se presenta en el archivo **hello_world_tf.py**.
+El código que se discute en toda esta sección se presenta en el archivo **hello_world_tf.py**. Para comenzar con el tutorial basta con ejecutar primero dicho script. 
 
 Para generar el modelo de aprendizaje en tensorflow para este tutorial se tienen las siguientes líneas de código en el archivo **hello_world_tf.py**:
 
@@ -26,7 +26,7 @@ Para generar el modelo de aprendizaje en tensorflow para este tutorial se tienen
     #Once layers are defined and connected, create the model
     model = keras.Model(inputs = inputs, outputs = outputs, name = "mnist_model")
 
-Dicho código da como resultado la red que se muestra en la siguiente figura:
+La siguiente figura es una representación de la red generada a partir del las líneas de código presentadas:
 
 ![Modelo Generado](/Images/model.png)
 
@@ -70,5 +70,56 @@ La última instrucción genera un directorio con toda la información del modelo
 
 ![Resultados de Entrenamiento y Prueba](/Images/training_test_results.png)
 
+## Conversión con TensorFlow Lite
+El código que se discute en esta sección se encuentra en el archivo **lite_converter.py**. Para hacer su conversión, se puede ejecutar directamente este script después de haber generado el modelo con el script **hello_word_tf.py**. 
 
+Para realizar la conversión el primer paso es cargar el modelo generado por el script anterior:
 
+    MODEL_PATH = "mnist_model"
+    #Convert the model to TFLite
+    converter = tf.lite.TFLiteConverter.from_saved_model(MODEL_PATH)
+
+Después se debe configurar los parámetros para la cuantización, esto es, convertir todos los valores flotantes que componen los pesos de la red a enteros de 8 bits, así como definir que las entradas y salidas de la red de igual manera serán enteros de 8 bits. Este paso se recomienda ya que los recursos con los que pudiera contar el dispositivo, memoria y CPU, pueden ser limitados, por lo que cuantizar el modelo lo hace más ligero y rápido de ejecutarse. 
+
+    def representative_data_gen():
+    for input_value in tf.data.Dataset.from_tensor_slices(x_test).batch(1).take(100):
+        yield [input_value]
+
+    #Convert the model to TFLite
+    converter = tf.lite.TFLiteConverter.from_saved_model(MODEL_PATH)
+    #Model Quantization for integer only
+    converter.optimizations = [tf.lite.Optimize.DEFAULT]
+    converter.representative_dataset = representative_data_gen
+    converter.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS_INT8]
+    converter.inference_input_type = tf.int8 
+    converter.inference_output_type = tf.int8
+    tflite_quant_model = converter.convert()
+    #Save the model
+    with open('model_quant.tflite', 'wb') as f:
+        f.write(tflite_quant_model)
+
+El modelo cuantizado se habrá guardado con el nombre *model_quant*. Sin embargo, aún no se encuentra listo para ser cargado al ESP32. Para ello, es necesario convertir el modelo mediante un tercer script encontrado en [stackoverflow](https://stackoverflow.com/questions/73301347/how-to-convert-model-tflite-to-model-cc-and-model-h-on-windows-10) que da como resultado el archivo .cc con el modelo convertido a vector a partir del archivo binario generado. Este script se encuentra en el repositorio bajo el nombre de **quant_model.py**. 
+
+**Archivo model.h**
+
+    extern const unsigned char g_model[];
+    extern const int g_model_len;
+
+**Archivo model.cc**
+    
+    #include "model.h"
+
+    const unsigned char g_model[] = {
+        0x1c, 0x00, 0x00, 0x00, 0x54, 0x46, 0x4c, 0x33, 0x14, 0x00, 0x20, 0x00,
+        ...
+    };
+
+    const int g_model_len = 57960; 
+
+## Transferencia al ESP32 
+Para desplegar el modelo, se tomo como base el ejemplo *hello_world* de [esp-tflite-micro](https://github.com/espressif/esp-tflite-micro/tree/master), el cual contiene las dependencias necesarias para ejecutar modelos de TensorFlow Lite. Se recomienda que el ejemplo *hello_world* se utilice como base para proyectos que requieran ejecutar modelos de TensorFlow Lite. Todos los archivos asociados al proyecto elaborado con la herramienta ESP-IDF se encuentran bajo el directorio **hello_world**, mientras que el código principal se encuentra en el archivo **main.cc**.
+
+Es necesario contruir el proyecto utilizando la ESP-IDF toolchain para posteriormente cargar el programa al ESP32 y comenzar a monitorear el dispositivo por medio de esta misma toolchain. La siguiente imagen muestra el resultado de cargar y ejecutar el programa en el dispositivo. 
+
+![Resultados de inferencia en el dispositivo](/Images/model_inference.png)
+En esta se observa la probabilidad que una imagen proporcionada mediante un vector en el archivo **main.cc** pertenezca a cada una de las posibles clases. Para este caso, se ingreso un vector representativo para un número 7 y el modelo infiere con un 99.60% de certeza que el número ingresado se trata de un 7.
